@@ -1,0 +1,7 @@
+# Local build products and temporary development caches.
+/bin/
+/.cache/
+/dist/
+/captures/
+*.log
+.DS_Store

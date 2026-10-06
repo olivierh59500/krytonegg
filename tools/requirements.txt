@@ -1,0 +1,2 @@
+# Required only to reproduce the original bitmap extraction.
+Pillow>=10.0

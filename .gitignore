@@ -5,3 +5,7 @@
 /captures/
 *.log
 .DS_Store
+
+# Python extraction caches are not source assets.
+__pycache__/
+*.pyc

@@ -303,6 +303,10 @@ func (w *World) attachBall() {
 	w.Balls = []Ball{{ID: w.nextBallID, X: w.Paddle.X, Y: w.Paddle.Y - w.Paddle.H/2 - NormalBallRadius, Radius: NormalBallRadius, Attached: true}}
 }
 
+// ResetPointer starts a fresh touch gesture without reusing the virtual mouse
+// position from before a pause, lifecycle suspension, or reversed-controls bonus.
+func (w *World) ResetPointer() { w.mouseSeen = false }
+
 // Tick advances game rules by one original PAL update, or 1/50 second.
 func (w *World) Tick(input Input) {
 	w.Events = w.Events[:0]

@@ -10,6 +10,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 
 	"krytonegg/internal/game"
+	"krytonegg/internal/touch"
 )
 
 // Construction edits the original 18x16 grid using the disk's tile identifiers.
@@ -50,6 +51,29 @@ func (c *Construction) encode() []byte {
 
 func (a *App) updateEditor() error {
 	c := a.construction
+	save, load, test := false, false, false
+	if a.options.Mobile {
+		for _, action := range a.touchFrame.Actions {
+			switch action {
+			case touch.TilePrev:
+				c.selected = (c.selected + len(c.palette) - 1) % len(c.palette)
+			case touch.TileNext:
+				c.selected = (c.selected + 1) % len(c.palette)
+			case touch.Bonus:
+				c.bonus = (c.bonus + 4) % 112
+			case touch.Power:
+				c.bonus = (c.bonus &^ 3) | ((c.bonus + 1) & 3)
+			case touch.Erase:
+				a.touchErase = !a.touchErase
+			case touch.Save:
+				save = true
+			case touch.Load:
+				load = true
+			case touch.Test:
+				test = true
+			}
+		}
+	}
 	if a.key(ebiten.KeyArrowLeft) {
 		c.selected = (c.selected + len(c.palette) - 1) % len(c.palette)
 	}
@@ -71,24 +95,27 @@ func (a *App) updateEditor() error {
 	}
 	mx, my := ebiten.CursorPosition()
 	x, y := a.graphics.WorldPosition(mx, my)
+	if a.options.Mobile {
+		x, y = a.touchFrame.PaintX, a.touchFrame.PaintY
+	}
 	column, row := int((x-game.FieldLeft)/16), int((y-24)/8)
 	if x >= game.FieldLeft && x < game.FieldRight && y >= 24 && y < 152 && row >= 0 && row < game.LevelRows && column >= 0 && column < game.LevelColumns {
 		i := row*game.LevelColumns + column
-		if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
+		if (!a.options.Mobile && ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft)) || (a.options.Mobile && a.touchFrame.Painting && !a.touchErase) {
 			c.cells[i] = uint16(c.palette[c.selected]) | uint16(c.bonus)<<8
 		}
-		if ebiten.IsMouseButtonPressed(ebiten.MouseButtonRight) {
+		if (!a.options.Mobile && ebiten.IsMouseButtonPressed(ebiten.MouseButtonRight)) || (a.options.Mobile && a.touchFrame.Painting && a.touchErase) {
 			c.cells[i] = 0
 		}
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyS) {
+	if inpututil.IsKeyJustPressed(ebiten.KeyS) || save {
 		if err := atomicWrite(filepath.Join(a.options.DataDir, "custom.level"), c.encode()); err != nil {
 			a.message, a.messageTicks = "SAVE FAILED", 180
 		} else {
 			a.message, a.messageTicks = "LEVEL SAVED", 180
 		}
 	}
-	if a.key(ebiten.KeyL) {
+	if a.key(ebiten.KeyL) || load {
 		data, err := os.ReadFile(filepath.Join(a.options.DataDir, "custom.level"))
 		if err != nil || len(data) != game.LevelByteSize {
 			a.message, a.messageTicks = "NO SAVED LEVEL", 180
@@ -98,7 +125,7 @@ func (a *App) updateEditor() error {
 			}
 		}
 	}
-	if a.key(ebiten.KeyEnter) {
+	if a.key(ebiten.KeyEnter) || test {
 		levels, err := game.LoadLevels(c.encode())
 		if err != nil {
 			return err
@@ -139,6 +166,12 @@ func (a *App) drawEditor(screen *ebiten.Image) {
 	g.Clear(screen, 16, 154, 288, 46)
 	g.CenteredText(screen, "CONSTRUCTION", 4)
 	g.Image(screen, fmt.Sprintf("sprites/brick-%d.png", c.palette[c.selected]), 16, 158)
+	if a.options.Mobile {
+		g.CenteredText(screen, a.editorTouchInfo(), 158)
+		g.CenteredText(screen, "DRAG TO PAINT BRICKS", 174)
+		g.CenteredText(screen, "USE SIDE BUTTONS TO EDIT", 188)
+		return
+	}
 	g.Text(screen, fmt.Sprintf("TILE %03d BONUS %02d POWER %d", c.palette[c.selected], c.bonus>>2, c.bonus&3), 40, 158)
 	g.CenteredText(screen, "ARROWS TILE B BONUS V POWER", 170)
 	g.CenteredText(screen, "S SAVE  L LOAD  ENTER TEST", 182)

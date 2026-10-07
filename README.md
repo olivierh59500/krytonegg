@@ -28,7 +28,7 @@ make build
 ```
 
 The dependencies are pinned in `go.mod`. No C compiler, Python, Kickstart ROM, or
-Amiga installation is required to play. Python and Pillow are used only if you
+Amiga installation is required for desktop play. Python and Pillow are used only if you
 choose to reproduce the asset conversion.
 
 ## Controls
@@ -85,6 +85,33 @@ go run . -scale 5 -fullscreen
 go run . -editor -data-dir ./captures/local-data
 go run . -custom ./captures/local-data/custom.level
 ```
+
+## Android
+
+The Android version shares the same Go simulation, original assets, and music.
+Its landscape view adds an 80-unit touch sidebar beside the original 320 × 200
+frame. Drag one finger within the field to move without jumping to the contact
+position. Use a second finger on **FIRE** to launch or hold fire. **PAUSE**,
+**SOUND**, and **MENU** remain accessible beside the field. The title, scores,
+help, and construction set have touch controls as well.
+
+```sh
+make android
+# Build, install, and launch on the connected Android device.
+make android-run
+# Preview the same controls on desktop.
+make touch
+```
+
+The APK is generated at `android/app/build/outputs/apk/debug/app-debug.apk`.
+Android requires SDK 36, NDK 28.2, and Java 17 or 21 for building; the scripts
+reuse the same toolchain conventions as the neighboring Android projects.
+No network or storage permissions are required by the installed application.
+Scores and custom levels live in its private storage directory. Returning
+from the background leaves an active round paused until **RESUME** is pressed.
+
+See [Android setup and controls](docs/android.md) for overrides, installation,
+verification, and the small platform lifecycle bridge.
 
 ## Verification and asset provenance
 

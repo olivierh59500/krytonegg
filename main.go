@@ -22,6 +22,7 @@ func main() {
 	flag.BoolVar(&options.Muted, "mute", false, "start with sound muted")
 	flag.BoolVar(&options.Fullscreen, "fullscreen", false, "start in fullscreen")
 	flag.BoolVar(&options.Editor, "editor", false, "open the construction set")
+	flag.BoolVar(&options.Mobile, "touch", false, "preview the Android touch controls on desktop")
 	flag.StringVar(&options.CustomLevel, "custom", "", "play an original-format 576-byte custom level")
 	flag.StringVar(&options.DataDir, "data-dir", "", "directory for local high scores and custom levels")
 	flag.IntVar(&options.SmokeTicks, "smoke", 0, "run an automatic check and exit after this many updates")
@@ -58,7 +59,11 @@ func main() {
 	}
 	defer app.Close()
 	ebiten.SetWindowTitle("Krypton Egg — Go / Ebitengine")
-	ebiten.SetWindowSize(320*options.Scale, 200*options.Scale)
+	windowWidth := 320
+	if options.Mobile {
+		windowWidth = 400
+	}
+	ebiten.SetWindowSize(windowWidth*options.Scale, 200*options.Scale)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetFullscreen(options.Fullscreen)
 	ebiten.SetScreenFilterEnabled(false)

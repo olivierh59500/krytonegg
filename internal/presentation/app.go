@@ -14,6 +14,7 @@ import (
 	"krytonegg/assets"
 	"krytonegg/internal/game"
 	"krytonegg/internal/sound"
+	"krytonegg/internal/touch"
 )
 
 // Options controls the native window and optional reproducible development checks.
@@ -21,6 +22,7 @@ type Options struct {
 	Scale, StartLevel, StartCombat, SmokeTicks int
 	Seed                                       uint64
 	Muted, Fullscreen, Editor                  bool
+	Mobile, FreezeCheck                        bool
 	CustomLevel, DataDir, Capture              string
 }
 
@@ -46,6 +48,10 @@ type App struct {
 	message                         string
 	messageTicks                    int
 	visuals                         []visualEffect
+	touchController                 touch.Controller
+	touchSamples                    []touch.Sample
+	touchFrame                      touch.Frame
+	touchErase                      bool
 }
 
 type visualEffect struct {
@@ -122,7 +128,7 @@ func New(options Options) (*App, error) {
 	if options.Editor {
 		a.openEditor()
 	}
-	graphics.Layout(game.Width*options.Scale, game.Height*options.Scale)
+	a.layout(game.Width*options.Scale, game.Height*options.Scale)
 	return a, nil
 }
 
@@ -136,6 +142,9 @@ func (a *App) Update() error {
 		return a.captureError
 	}
 	if a.options.SmokeTicks > 0 && a.steps >= a.options.SmokeTicks {
+		if a.options.FreezeCheck {
+			return nil
+		}
 		if a.options.Capture == "" || a.captured {
 			return ebiten.Termination
 		}
@@ -145,6 +154,12 @@ func (a *App) Update() error {
 	a.steps++
 	if a.messageTicks > 0 {
 		a.messageTicks--
+	}
+	if a.options.Mobile && a.options.SmokeTicks == 0 {
+		a.sampleTouches()
+		if a.touchActions() {
+			return nil
+		}
 	}
 	if a.key(ebiten.KeyF11) || a.key(ebiten.KeyF) {
 		ebiten.SetFullscreen(!ebiten.IsFullscreen())
@@ -321,8 +336,10 @@ func (a *App) input() game.Input {
 		launch = launch || a.key(ebiten.KeySpace)
 	}
 	fire := ebiten.IsKeyPressed(ebiten.KeyF2) || ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft)
-	a.touchIDs = ebiten.AppendTouchIDs(a.touchIDs[:0])
-	if len(a.touchIDs) > 0 {
+	if !a.options.Mobile {
+		a.touchIDs = ebiten.AppendTouchIDs(a.touchIDs[:0])
+	}
+	if !a.options.Mobile && len(a.touchIDs) > 0 {
 		tx, ty := ebiten.TouchPosition(a.touchIDs[0])
 		x, y = a.graphics.WorldPosition(tx, ty)
 		a.mouseMode = true
@@ -330,6 +347,7 @@ func (a *App) input() game.Input {
 		fire = true
 	}
 	a.gamepadIDs = ebiten.AppendGamepadIDs(a.gamepadIDs[:0])
+	gamepadLaunch, gamepadFire := false, false
 	for _, id := range a.gamepadIDs {
 		if !ebiten.IsStandardGamepadLayoutAvailable(id) {
 			continue
@@ -348,20 +366,35 @@ func (a *App) input() game.Input {
 		if vertical > 0.2 {
 			down, a.mouseMode = true, false
 		}
-		launch = launch || inpututil.IsStandardGamepadButtonJustPressed(id, ebiten.StandardGamepadButtonRightBottom)
-		fire = fire || ebiten.IsStandardGamepadButtonPressed(id, ebiten.StandardGamepadButtonRightBottom)
+		gamepadLaunch = gamepadLaunch || inpututil.IsStandardGamepadButtonJustPressed(id, ebiten.StandardGamepadButtonRightBottom)
+		gamepadFire = gamepadFire || ebiten.IsStandardGamepadButtonPressed(id, ebiten.StandardGamepadButtonRightBottom)
 	}
+	launch = launch || gamepadLaunch
+	fire = fire || gamepadFire
 	pause := a.key(ebiten.KeyP)
 	if a.world.State == game.Playing || a.world.State == game.Ready || a.world.State == game.Paused || a.world.State == game.Combat {
 		pause = pause || a.key(ebiten.KeySpace)
 	}
-	return game.Input{UseMouse: a.mouseMode, PaddleX: x, PaddleY: y, Left: left, Right: right, Up: up, Down: down, Launch: launch, Fire: fire, Pause: pause}
+	input := game.Input{UseMouse: a.mouseMode, PaddleX: x, PaddleY: y, Left: left, Right: right, Up: up, Down: down, Launch: launch, Fire: fire, Pause: pause}
+	if a.options.Mobile {
+		// Idle touch input must release the virtual mouse baseline. Otherwise
+		// reverse/sensitivity bonuses could jump the paddle on the next gesture.
+		input.UseMouse = a.touchFrame.Move
+		input.PaddleX, input.PaddleY = a.touchFrame.X, a.touchFrame.Y
+		input.Launch = a.key(ebiten.KeyF2) || a.key(ebiten.KeyEnter) || a.touchFrame.Launch || gamepadLaunch
+		input.Fire = ebiten.IsKeyPressed(ebiten.KeyF2) || a.touchFrame.Fire || gamepadFire
+		if a.world.State == game.Paused && a.touchFrame.Launch {
+			input.Launch = false
+			input.Pause = true
+		}
+	}
+	return input
 }
 
-// Draw renders into the native window resolution with integer pixel-art scaling.
+// Draw renders original bitmaps into the native window or Android touch frame.
 func (a *App) Draw(screen *ebiten.Image) {
 	screen.Fill(color.Black)
-	a.graphics.Layout(screen.Bounds().Dx(), screen.Bounds().Dy())
+	a.layout(screen.Bounds().Dx(), screen.Bounds().Dy())
 	if a.editor {
 		a.drawEditor(screen)
 	} else if a.scores {
@@ -381,7 +414,11 @@ func (a *App) Draw(screen *ebiten.Image) {
 		}
 		a.graphics.Image(screen, "sprites/sprite-00.png", 104, markerY)
 		a.graphics.CenteredText(screen, fmt.Sprintf("ROUND %02d", a.selectedRound+1), 102)
-		a.graphics.CenteredText(screen, "E CONSTRUCTION  H HELP", 151)
+		if a.options.Mobile {
+			a.graphics.CenteredText(screen, "EDITOR       HELP", 151)
+		} else {
+			a.graphics.CenteredText(screen, "E CONSTRUCTION  H HELP", 151)
+		}
 	} else if a.world.State == game.GameOver || a.world.State == game.Won {
 		a.graphics.Image(screen, "images/fame.png", 0, 0)
 		if a.world.State == game.Won {
@@ -390,7 +427,11 @@ func (a *App) Draw(screen *ebiten.Image) {
 			a.graphics.CenteredText(screen, "GAME OVER", 136)
 		}
 		a.graphics.CenteredText(screen, fmt.Sprintf("SCORE %06d", a.world.Score), 152)
-		a.graphics.CenteredText(screen, "SPACE TO RESTART", 176)
+		if a.options.Mobile {
+			a.graphics.CenteredText(screen, "TAP PLAY TO RESTART", 176)
+		} else {
+			a.graphics.CenteredText(screen, "SPACE TO RESTART", 176)
+		}
 	} else {
 		if a.world.Combat != nil {
 			a.graphics.Combat(screen, a.world, a.highScore)
@@ -407,10 +448,18 @@ func (a *App) Draw(screen *ebiten.Image) {
 		switch a.world.State {
 		case game.Ready:
 			a.graphics.CenteredText(screen, fmt.Sprintf("ROUND %02d", a.world.LevelIndex+1), 145)
-			a.graphics.CenteredText(screen, "CLICK TO LAUNCH", 158)
+			if a.options.Mobile {
+				a.graphics.CenteredText(screen, "FIRE TO LAUNCH", 158)
+			} else {
+				a.graphics.CenteredText(screen, "CLICK TO LAUNCH", 158)
+			}
 		case game.Paused:
 			a.graphics.CenteredText(screen, "PAUSED", 145)
-			a.graphics.CenteredText(screen, "P TO RESUME", 160)
+			if a.options.Mobile {
+				a.graphics.CenteredText(screen, "TAP RESUME", 160)
+			} else {
+				a.graphics.CenteredText(screen, "P TO RESUME", 160)
+			}
 		case game.LevelClear:
 			a.graphics.CenteredText(screen, "ROUND CLEAR", 145)
 		}
@@ -421,6 +470,9 @@ func (a *App) Draw(screen *ebiten.Image) {
 	if a.messageTicks > 0 {
 		a.graphics.CenteredText(screen, a.message, 178)
 	}
+	if a.options.Mobile {
+		a.drawTouchControls(screen)
+	}
 	if a.capturePending && !a.captured {
 		a.capture(screen)
 	}
@@ -429,6 +481,9 @@ func (a *App) Draw(screen *ebiten.Image) {
 func (a *App) drawHelp(screen *ebiten.Image) {
 	a.graphics.Image(screen, "images/menu.png", 0, 0)
 	lines := []string{"KRYPTON EGG", "MOUSE OR ARROWS MOVE", "CLICK OR F2 LAUNCH", "HOLD CLICK TO FIRE", "SPACE OR P PAUSE", "F1 PAL NTSC  F3 END", "F FULLSCREEN  M SOUND", "H CLOSE HELP"}
+	if a.options.Mobile {
+		lines = []string{"KRYPTON EGG", "DRAG TO MOVE PADDLE", "FIRE TO RELEASE BALL", "HOLD FIRE TO SHOOT", "PAUSE FREEZES GAME", "SOUND TOGGLE AUDIO", "MENU RETURNS TO TITLE", "TAP TO CLOSE HELP"}
+	}
 	for i, line := range lines {
 		a.graphics.CenteredText(screen, line, float64(56+i*16))
 	}
@@ -436,6 +491,7 @@ func (a *App) drawHelp(screen *ebiten.Image) {
 
 // Layout preserves the original aspect ratio inside a resizable high-resolution window.
 func (a *App) Layout(width, height int) (int, int) {
+	a.layout(max(width, 1), max(height, 1))
 	return max(width, 1), max(height, 1)
 }
 

@@ -39,10 +39,16 @@ Go code. Original machine code is not executed at runtime.
 - The construction screen edits original tile codes, attaches bonuses,
   saves and loads a 576-byte level, and tests it. Leaving a test restores the
   campaign rather than replacing it with the test level.
-- Presentation defaults to a 1,280 by 800 window with nearest-neighbor,
+- Desktop presentation defaults to a 1,280 by 800 window with nearest-neighbor,
   integer scaling. Resizing preserves the original 320 by 200 composition
   through centered letterboxing. Simulation positions retain fractional
   precision at higher output resolutions.
+- An ARM64 Android APK runs the same Go game and go-zikmu audio integration on
+  API 23 or newer. Relative field dragging and independent fire controls share
+  a 400 by 200 view with an original-art sidebar. Uniform fractional scaling
+  fits landscape screens; title navigation and the editor work with touch.
+  Android lifecycle suspension stops the view and audio, and local saves use
+  the application's private files directory.
 - Fixed seeds permit reproducible simulation. Command-line round and combat
   selection, automatic update runs, and PNG capture support review.
 
@@ -71,7 +77,7 @@ Several presentation and persistence details remain simplified:
 - WAV files use recovered base sample periods. Events that changed Paula
   sample periods dynamically in the original do not all vary pitch here.
 - The construction screen preserves the original level format and art while
-  providing new mouse and keyboard interactions.
+  providing new mouse, keyboard, and touch interactions.
 
 These differences should remain visible in fidelity claims. Original gameplay
 video and disk-derived evidence are described in
@@ -91,3 +97,14 @@ Native smoke runs and captures exercise application startup, graphics, audio
 initialization, and automatic updates. The printed smoke report records the
 resulting world state; it is not a claim that every campaign round was cleared
 or that every original behavior was verified.
+
+The Android APK was installed and tested on a Google Pixel 10a running API 37.
+Device checks verified relative movement without unintended launch, firing,
+scores and Back navigation, stable pause captures, Home/return behavior, editor
+painting and its original-format save, returning from a custom-level test,
+and a 45-update alien-combat render. Android audio initialization completed
+successfully. Headless touch and presentation tests cover simultaneous fingers,
+gesture ownership, reversed-control reanchoring, and editor reload behavior;
+physical automation used single-pointer ADB gestures. Package checks validate
+the signature, metadata, and 16 KiB archive and native-library alignment.
+See [android.md](android.md) for builds, controls, and detailed verification.

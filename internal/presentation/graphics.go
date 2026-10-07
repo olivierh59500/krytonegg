@@ -129,6 +129,14 @@ func (g *Graphics) Layout(width, height int) {
 	g.OffsetY = (float64(height) - game.Height*g.Scale) / 2
 }
 
+// LayoutTouch reserves an original-unit sidebar and fits the phone's landscape
+// surface uniformly. Nearest filtering retains the original bitmap pixels.
+func (g *Graphics) LayoutTouch(width, height int) {
+	g.Scale = math.Min(float64(width)/400, float64(height)/game.Height)
+	g.OffsetX = (float64(width) - 400*g.Scale) / 2
+	g.OffsetY = (float64(height) - game.Height*g.Scale) / 2
+}
+
 // WorldPosition converts mouse and touch coordinates to the original playfield.
 func (g *Graphics) WorldPosition(x, y int) (float64, float64) {
 	if g.Scale == 0 {

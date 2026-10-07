@@ -33,6 +33,7 @@ const (
 	GameOver
 	Won
 	Combat
+	Dying
 )
 
 // EffectKind identifies a bonus carried by a brick or falling drop.
@@ -138,12 +139,15 @@ type Shot struct {
 
 // Enemy uses original sprite top-left coordinates and retains its behavior flags.
 type Enemy struct {
-	X, Y, VX, VY float64
-	Kind, HP     int
-	W, H         float64
-	Code         uint16
-	Age, Frame   int
-	Destroyed    bool
+	X, Y, VX, VY                      float64
+	Kind, HP                          int
+	W, H                              float64
+	Code                              uint16
+	Age, Frame                        int
+	Destroyed                         bool
+	DrawOffsetX, DrawOffsetY          float64
+	DeathFrame, DeathTicks            int
+	AnimationStep, AnimationDirection int
 }
 
 type Effect struct {
@@ -170,6 +174,8 @@ const (
 	CombatStarted
 	CombatHit
 	CombatCompleted
+	PaddleDestroyed
+	ReserveEarned
 )
 
 // Events are emitted for one tick and consumed by presentation and audio code.
@@ -178,6 +184,8 @@ type Event struct {
 	X, Y   float64
 	Value  int
 	Effect EffectKind
+	Sound  string
+	Period int
 }
 
 // World owns all mutable simulation state. Advance it exactly once per fixed update.
@@ -187,6 +195,8 @@ type World struct {
 	Score, Lives           int
 	ScoreMultiplier        int
 	TickCount              uint64
+	FrameCounter           uint64
+	UnlimitedReserves      bool
 	Paddle                 Paddle
 	SecondPaddle           *Paddle
 	ShieldCharges          int
@@ -197,6 +207,7 @@ type World struct {
 	Shots                  []Shot
 	Enemies                []Enemy
 	DoorFrame              int
+	DeathSlot, DeathTicks  int
 	Combat                 *CombatData
 	Portals                []Portal
 	Effects                []Effect
@@ -207,6 +218,12 @@ type World struct {
 	stateTicks             int
 	resumeState            State
 	enemyCooldown          int
+	enemyDoorPhase         int
+	enemyDoorTicks         int
+	enemyTurnCounter       int
+	enemyAnimationCounter  int
+	enemyAnimationFrame    int
+	scoreLifeThreshold     int
 	combatBoundary         []int
 	combatShotCount        int
 	combatAimVariant       bool
@@ -220,7 +237,7 @@ func New(levels []Level, seed uint64) *World {
 	if seed == 0 {
 		seed = 1
 	}
-	w := &World{State: Title, Lives: InitialLives, seed: seed, initialSeed: seed}
+	w := &World{State: Title, Lives: InitialLives, seed: seed, initialSeed: seed, enemyTurnCounter: 99, enemyAnimationCounter: 1}
 	w.Levels = make([]Level, len(levels))
 	for i, level := range levels {
 		w.Levels[i] = level
@@ -248,6 +265,19 @@ func (w *World) Restart() {
 	w.loadLevel(0)
 }
 
+// PreserveRuntimeFrom carries the original process-wide counters into a newly
+// constructed play session. Scores and reserves reset; their highest award
+// bucket and the shared enemy clocks do not reset in the supplied executable.
+func (w *World) PreserveRuntimeFrom(previous *World) {
+	if previous == nil || previous == w {
+		return
+	}
+	w.scoreLifeThreshold = previous.scoreLifeThreshold
+	w.enemyTurnCounter = previous.enemyTurnCounter
+	w.enemyAnimationCounter = previous.enemyAnimationCounter
+	w.UnlimitedReserves = previous.UnlimitedReserves
+}
+
 func (w *World) resetPaddle() {
 	w.Paddle = Paddle{X: (FieldLeft + FieldRight) / 2, Y: 189, W: NormalPaddleWidth, H: 8, Slot: 13, TargetSlot: 13}
 	w.SecondPaddle, w.ShieldCharges, w.WeaponMode = nil, 0, 0
@@ -268,6 +298,8 @@ func (w *World) StartAt(index int) error {
 
 func (w *World) loadLevel(index int) {
 	w.LevelIndex = index
+	w.FrameCounter = 0
+	w.ScoreMultiplier = 0
 	w.Bricks = append(w.Bricks[:0], w.Levels[index].Bricks...)
 	for i := range w.Bricks {
 		b := &w.Bricks[i]
@@ -285,7 +317,8 @@ func (w *World) loadLevel(index int) {
 		}
 	}
 	w.Drops, w.Shots, w.Enemies, w.Effects = nil, nil, nil, nil
-	w.Combat, w.enemyCooldown, w.DoorFrame = nil, 87, 0
+	w.Combat, w.DoorFrame = nil, 0
+	w.resetEnemyTiming()
 	w.Portals = nil
 	for _, brick := range w.Bricks {
 		if brick.Kind == 0xf8 || brick.Kind == 0xf9 {
@@ -293,6 +326,7 @@ func (w *World) loadLevel(index int) {
 		}
 	}
 	w.resetPaddle()
+	w.DeathSlot, w.DeathTicks = 0, 0
 	w.attachBall()
 	w.State, w.stateTicks = Ready, 0
 	w.emit(LevelStarted, w.Paddle.X, w.Paddle.Y, index+1, NoEffect)
@@ -324,6 +358,7 @@ func (w *World) Tick(input Input) {
 		return
 	}
 	w.TickCount++
+	w.FrameCounter++
 	w.stateTicks++
 	switch w.State {
 	case Title, GameOver, Won:
@@ -333,38 +368,36 @@ func (w *World) Tick(input Input) {
 		return
 	case LevelClear:
 		if input.Launch || w.stateTicks >= 120 {
-			if (w.LevelIndex+1)%10 == 0 {
-				w.startCombat()
-				return
-			}
-			if w.LevelIndex+1 >= len(w.Levels) {
-				w.State = Won
-			} else {
-				w.loadLevel(w.LevelIndex + 1)
-			}
+			w.advanceRound()
 		}
 		return
 	case Combat:
 		w.updateCombat(input)
 		return
+	case Dying:
+		w.updatePaddleDeath()
+		return
 	}
 	w.previousPaddleLeft = w.Paddle.X - w.Paddle.W/2
 	w.movePaddle(input)
 	w.updatePaddleSize()
+	releaseCue := false
 	for i := range w.Balls {
 		if w.Balls[i].Attached {
 			w.Balls[i].X, w.Balls[i].Y = w.Paddle.X+w.Balls[i].AttachedOffset, w.Paddle.Y-w.Paddle.H/2-w.Balls[i].Radius-0.05
 			if input.Launch {
 				w.Balls[i].Attached = false
 				w.Balls[i].VX, w.Balls[i].VY = 1, -2
+				if !releaseCue {
+					w.soundEvent(ShotFired, w.Balls[i].X, w.Balls[i].Y, 0, Sticky, "magnet-release", 0x2cb)
+					releaseCue = true
+				}
 			}
 		}
 	}
 	if w.State == Ready {
 		if input.Launch {
 			w.State, w.stateTicks = Playing, 0
-		} else {
-			return
 		}
 	}
 	w.updateEffects()
@@ -375,8 +408,8 @@ func (w *World) Tick(input Input) {
 		}
 	}
 	w.updateShots()
-	w.updateEnemies()
 	w.updateBalls()
+	w.updateEnemies()
 	w.updateDrops()
 	if w.remainingBricks() == 0 {
 		w.State, w.stateTicks = LevelClear, 0
@@ -385,18 +418,38 @@ func (w *World) Tick(input Input) {
 		return
 	}
 	if len(w.Balls) == 0 {
-		w.Lives--
-		w.emit(LifeLost, w.Paddle.X, w.Paddle.Y, w.Lives, NoEffect)
-		if w.Lives <= 0 {
-			w.State, w.stateTicks = GameOver, 0
-			return
-		}
-		w.Effects, w.Drops, w.Shots = nil, nil, nil
-		w.Enemies, w.enemyCooldown = nil, 87
-		w.resetPaddle()
-		w.attachBall()
-		w.State, w.stateTicks = Ready, 0
+		w.State, w.stateTicks = Dying, 0
+		w.DeathSlot, w.DeathTicks = w.Paddle.Slot, w.Paddle.Slot+1
+		w.soundEvent(PaddleDestroyed, w.Paddle.X, w.Paddle.Y, w.DeathSlot, NoEffect, "game-over", 0x2cb)
 	}
+}
+
+func (w *World) updatePaddleDeath() {
+	w.DeathSlot--
+	w.DeathTicks--
+	if w.DeathSlot >= 6 {
+		w.Paddle.W = PaddleWidths[w.DeathSlot-6]
+	}
+	if w.DeathTicks > 0 {
+		w.updateBricks()
+		w.updateEnemies()
+		return
+	}
+	if !w.UnlimitedReserves {
+		w.Lives--
+	}
+	w.emit(LifeLost, w.Paddle.X, w.Paddle.Y, w.Lives, NoEffect)
+	if w.Lives <= 0 {
+		w.State, w.stateTicks = GameOver, 0
+		return
+	}
+	w.ScoreMultiplier = 0
+	w.Effects, w.Drops, w.Shots = nil, nil, nil
+	w.Enemies = nil
+	w.resetEnemyTiming()
+	w.resetPaddle()
+	w.attachBall()
+	w.State, w.stateTicks = Ready, 0
 }
 
 func (w *World) movePaddle(in Input) {
@@ -456,6 +509,10 @@ func (w *World) emit(kind EventKind, x, y float64, value int, effect EffectKind)
 	w.Events = append(w.Events, Event{Kind: kind, X: x, Y: y, Value: value, Effect: effect})
 }
 
+func (w *World) soundEvent(kind EventKind, x, y float64, value int, effect EffectKind, sound string, period int) {
+	w.Events = append(w.Events, Event{Kind: kind, X: x, Y: y, Value: value, Effect: effect, Sound: sound, Period: period})
+}
+
 func (w *World) remainingBricks() int {
 	n := 0
 	for _, b := range w.Bricks {
@@ -498,13 +555,15 @@ func (w *World) ApplyBonusPower(kind EffectKind, power int) {
 		}
 	}
 	if kind == RandomBonus {
-		for {
-			code := uint8(1 + int(w.random()*27))
-			if code != 12 && code != 22 {
-				w.ApplyBonusPower(BonusFromCode(code<<2), power)
-				return
-			}
+		code := (int(w.Paddle.X-w.Paddle.W/2) + int(w.FrameCounter)) & 31
+		if code > 27 {
+			code -= 5
 		}
+		if code == 12 || code == 22 {
+			code = 8
+		}
+		w.ApplyBonusPower(BonusFromCode(uint8(code)<<2), power)
+		return
 	}
 	if kind == Shield {
 		w.ShieldCharges += power + 1
@@ -534,26 +593,13 @@ func (w *World) ApplyBonusPower(kind EffectKind, power int) {
 		return
 	}
 	if kind == Multiball {
-		original := append([]Ball(nil), w.Balls...)
-		for _, source := range original {
-			if source.Attached {
-				continue
-			}
-			if len(w.Balls) >= 8 {
-				return
-			}
-			angle := (w.random()*0.6 + 0.2)
-			if w.random() < 0.5 {
-				angle = -angle
-			}
-			w.nextBallID++
-			ball := source
-			ball.ID = w.nextBallID
-			ball.VX = source.VX*math.Cos(angle) - source.VY*math.Sin(angle)
-			ball.VY = source.VX*math.Sin(angle) + source.VY*math.Cos(angle)
-			w.Balls = append(w.Balls, ball)
+		if len(w.Balls) >= 8 {
 			return
 		}
+		w.nextBallID++
+		// The original bonus creates a fresh small ball at the ship, independently
+		// of the existing balls, their attachment state, and their active growth.
+		w.Balls = append(w.Balls, Ball{ID: w.nextBallID, X: w.Paddle.X - w.Paddle.W/2 + 15 + NormalBallRadius, Y: w.Paddle.Y - w.Paddle.H/2 - 4 + NormalBallRadius, VX: 1, VY: -2, Radius: NormalBallRadius})
 		return
 	}
 	if kind == Fast || kind == Slow {

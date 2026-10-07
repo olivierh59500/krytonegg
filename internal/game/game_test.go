@@ -53,14 +53,14 @@ func TestFastBallCannotTunnelThroughBrick(t *testing.T) {
 	}
 }
 
-func TestCornerContactPreservesSpeed(t *testing.T) {
+func TestCornerContactPreservesNativeIntegralVelocity(t *testing.T) {
 	w := New([]Level{{Bricks: []Brick{{X: 48, Y: 48, W: 16, H: 8, Kind: 1, HP: 2, Destructible: true}}}}, 1)
 	startWorld(w)
 	w.Balls = []Ball{{ID: 1, X: 45, Y: 45, VX: 4, VY: 4, Radius: 3}}
 	w.Tick(Input{})
 	ball := w.Balls[0]
-	if ball.VX >= 0 || ball.VY >= 0 {
-		t.Fatalf("corner normal did not reflect both components: %+v", ball)
+	if ball.VX != 4 || ball.VY != -4 {
+		t.Fatalf("corner contact did not negate one native velocity axis: %+v", ball)
 	}
 	if math.Abs(math.Hypot(ball.VX, ball.VY)-math.Sqrt(32)) > 1e-9 {
 		t.Fatalf("collision changed speed: %+v", ball)
@@ -98,6 +98,12 @@ func TestOnlyLastBallCostsLife(t *testing.T) {
 	}
 	w.Balls[0].Y, w.Balls[0].VY = 204, 1
 	w.Tick(Input{})
+	if w.State != Dying || w.Lives != InitialLives || w.DeathTicks != 14 {
+		t.Fatal("native last-ball death did not begin before reserve deduction")
+	}
+	for tick := 0; tick < 14; tick++ {
+		w.Tick(Input{})
+	}
 	if w.Lives != InitialLives-1 || w.State != Ready || len(w.Balls) != 1 || !w.Balls[0].Attached {
 		t.Fatalf("last ball did not respawn: %+v", w)
 	}
@@ -320,10 +326,10 @@ func TestDecodedEnemyFlagsControlPaddleHazard(t *testing.T) {
 		}
 		w.Enemies = []Enemy{{X: 150, Y: 185, W: 16, H: 23, Kind: 2, Code: code, HP: 1}}
 		w.Tick(Input{})
-		if lethal && (w.Lives != InitialLives-1 || w.State != Ready) {
+		if lethal && (w.Lives != InitialLives || w.State != Dying) {
 			t.Fatal("lethal original enemy did not cost one life")
 		}
-		if !lethal && (w.Lives != InitialLives || w.State != Playing || len(w.Enemies) != 0) {
+		if !lethal && (w.Lives != InitialLives || w.State != Playing || len(w.Enemies) != 1 || !w.Enemies[0].Destroyed || w.Enemies[0].DeathTicks != 56) {
 			t.Fatal("normal enemy was lethal on paddle contact")
 		}
 	}
@@ -494,6 +500,9 @@ func TestRecoveredCampaignReplayKeepsFinitePhysics(t *testing.T) {
 			t.Fatalf("invalid counters at tick%d", tick)
 		}
 		for _, ball := range w.Balls {
+			if ball.VX != math.Trunc(ball.VX) || ball.VY != math.Trunc(ball.VY) {
+				t.Fatalf("fractional native velocity at tick %d: %+v", tick, ball)
+			}
 			for _, value := range []float64{ball.X, ball.Y, ball.VX, ball.VY, ball.Radius} {
 				if math.IsNaN(value) || math.IsInf(value, 0) {
 					t.Fatalf("nonfinite original-campaign physics at tick%d: %+v", tick, ball)

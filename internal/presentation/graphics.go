@@ -25,6 +25,10 @@ type Graphics struct {
 	stars                   []star
 	animationTick           uint64
 	Scale, OffsetX, OffsetY float64
+	BackgroundIndex         int
+	ReadyBanner             bool
+	darkCanvas              *ebiten.Image
+	darkShader              *ebiten.Shader
 }
 
 type star struct {
@@ -53,6 +57,22 @@ func (g *Graphics) SetStars(seed uint64) {
 // NewGraphics converts embedded PNG data to textures without repainting it.
 func NewGraphics() (*Graphics, error) {
 	g := &Graphics{images: make(map[string]*ebiten.Image), bounds: make(map[string]image.Rectangle), bonusFrames: make(map[int]int)}
+	var err error
+	g.darkShader, err = ebiten.NewShader([]byte(`//kage:unit pixels
+package main
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
+ result := imageSrc0At(srcPos)
+ position := srcPos-imageSrc0Origin()
+ if position.y >= 24.0 {
+  result.rgb = floor(floor(result.rgb*15.0+vec3(0.01))*0.5)/15.0
+ }
+ return result
+}`))
+	if err != nil {
+		return nil, fmt.Errorf("compile original palette dimming: %w", err)
+	}
+	g.darkCanvas = ebiten.NewImage(game.Width, game.Height)
 	names, err := assets.Names()
 	if err != nil {
 		return nil, err
@@ -241,30 +261,44 @@ func (g *Graphics) Board(screen *ebiten.Image, w *game.World, highScore int) {
 	if w.State != game.Paused {
 		g.animationTick = w.TickCount
 	}
-	if !w.Active(game.Darkness) {
-		g.Image(screen, fmt.Sprintf("images/background-%d.png", w.LevelIndex%83), 0, 0)
-		for _, b := range w.Bricks {
-			if !b.Destroyed {
-				g.Image(screen, fmt.Sprintf("sprites/brick-%d.png", b.Kind), b.X, b.Y)
-			}
+	if w.Active(game.Darkness) && g.darkCanvas != nil && g.darkShader != nil {
+		g.darkCanvas.Fill(color.Black)
+		native := *g
+		native.Scale, native.OffsetX, native.OffsetY = 1, 0, 0
+		native.board(g.darkCanvas, w, highScore)
+		op := &ebiten.DrawRectShaderOptions{}
+		op.Images[0] = g.darkCanvas
+		op.GeoM.Scale(g.Scale, g.Scale)
+		op.GeoM.Translate(g.OffsetX, g.OffsetY)
+		screen.DrawRectShader(game.Width, game.Height, g.darkShader, op)
+		return
+	}
+	g.board(screen, w, highScore)
+}
+
+// board draws a complete frame before applying the original palette change.
+func (g *Graphics) board(screen *ebiten.Image, w *game.World, highScore int) {
+	g.Image(screen, fmt.Sprintf("images/background-%d.png", g.BackgroundIndex%83), 0, 0)
+	for _, b := range w.Bricks {
+		if !b.Destroyed {
+			g.Image(screen, fmt.Sprintf("sprites/brick-%d.png", b.Kind), b.X, b.Y)
 		}
-	} else {
-		g.Image(screen, "images/hud.png", 0, 0)
-		g.Image(screen, "images/wall-left.png", 0, 24)
-		g.Image(screen, "images/wall-right.png", 304, 24)
 	}
 	if w.DoorFrame > 0 {
 		g.Image(screen, fmt.Sprintf("sprites/door-%d.png", w.DoorFrame), 144, 16)
 	}
 	for _, enemy := range w.Enemies {
 		if enemy.Destroyed {
+			if enemy.DeathTicks > 0 {
+				g.Image(screen, fmt.Sprintf("sprites/enemy-death-%d.png", max(0, enemy.DeathFrame)), enemy.X, enemy.Y)
+			}
 			continue
 		}
 		name := fmt.Sprintf("sprites/enemy-%d-%d.png", enemy.Kind, enemy.Frame)
 		if g.images[name] == nil {
 			name = fmt.Sprintf("sprites/enemy-%d-0.png", enemy.Kind)
 		}
-		g.Image(screen, name, enemy.X, enemy.Y)
+		g.Image(screen, name, enemy.X+enemy.DrawOffsetX, enemy.Y+enemy.DrawOffsetY)
 	}
 	for _, drop := range w.Drops {
 		// The original high-byte encodes the falling bonus graphic and strength.
@@ -283,30 +317,32 @@ func (g *Graphics) Board(screen *ebiten.Image, w *game.World, highScore int) {
 		b := g.bounds[name]
 		g.Image(screen, name, shot.X-float64(b.Dx())/2, shot.Y-float64(b.Dy()))
 	}
-	for _, ball := range w.Balls {
-		index := 0
-		for i, diameter := range []float64{5, 6, 8, 10, 13, 16} {
-			if ball.Radius*2 >= diameter {
-				index = i
+	if !g.ReadyBanner {
+		for _, ball := range w.Balls {
+			index := 0
+			for i, diameter := range []float64{5, 6, 8, 10, 13, 16} {
+				if ball.Radius*2 >= diameter {
+					index = i
+				}
 			}
+			name := fmt.Sprintf("sprites/sprite-%02d.png", index)
+			if w.Active(game.SuperBall) {
+				name = fmt.Sprintf("sprites/superball-%d.png", index)
+			}
+			if w.Active(game.GhostBall) {
+				name = fmt.Sprintf("sprites/ghostball-%d.png", index)
+			}
+			// The original bitmap adds a two-pixel shadow on its right and bottom.
+			g.Image(screen, name, ball.X-ball.Radius, ball.Y-ball.Radius)
 		}
-		name := fmt.Sprintf("sprites/sprite-%02d.png", index)
-		if w.Active(game.SuperBall) {
-			name = fmt.Sprintf("sprites/superball-%d.png", index)
+		if w.Active(game.GhostPaddle) {
+			g.Image(screen, "sprites/paddle-ghost.png", w.Paddle.X-16, w.Paddle.Y-4)
+		} else {
+			g.paddle(screen, w.Paddle, w)
 		}
-		if w.Active(game.GhostBall) {
-			name = fmt.Sprintf("sprites/ghostball-%d.png", index)
+		if w.SecondPaddle != nil {
+			g.paddle(screen, *w.SecondPaddle, w)
 		}
-		// The original bitmap adds a two-pixel shadow on its right and bottom.
-		g.Image(screen, name, ball.X-ball.Radius, ball.Y-ball.Radius)
-	}
-	if w.Active(game.GhostPaddle) {
-		g.Image(screen, "sprites/paddle-ghost.png", w.Paddle.X-16, w.Paddle.Y-4)
-	} else {
-		g.paddle(screen, w.Paddle, w)
-	}
-	if w.SecondPaddle != nil {
-		g.paddle(screen, *w.SecondPaddle, w)
 	}
 	g.hud(screen, w, highScore)
 }

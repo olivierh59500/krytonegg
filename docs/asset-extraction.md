@@ -9,7 +9,7 @@ python3 -m pip install Pillow
 python3 tools/extract_adf.py
 ```
 
-The converter reads `kry` into memory only to recover bitmap dimensions, palette registers, sprite pointers, enemy choices, and sound playback parameters. It does not place this executable in the shipped assets. The original ADF is retained as the reference source. Intermediate disassembly, if present under `.cache`, is excluded from Git.
+The converter reads `kry` into memory only to recover bitmap dimensions, palette registers, sprite pointers, enemy choices, and sound playback parameters. It does not place this executable in the shipped assets. The original ADF is retained locally as the reference source. All disk-derived files, including converted PNG/WAV data and metadata, are excluded from Git and its history. The extraction and recovery scripts remain versioned. Intermediate disassembly, if present under `.cache`, is excluded from Git.
 
 ## Asset inventory
 
@@ -26,7 +26,7 @@ The converter reads `kry` into memory only to recover bitmap dimensions, palette
 - `images/combat.png` reconstructs the static combat scene from raw rectangles in `final.bmp`. `combat-ship.png` is the original 16×33 player sprite. The three 48×47 mouth frames are placed at (240,55). The original player and enemy shots are provided separately.
 - `images/combat-meters.png` contains the complete 320×33 original energy panel at scene Y=167. The source stores it as 1,320 contiguous bytes per plane; its decoding requires reshaping these bytes into 320×33 pixels rather than using the assembly copy loop's 96-byte iteration grouping as a bitmap width. The original copper palette changes at Y=166 are applied. Energy fill regions occupy X=27..138 and X=180..291, Y=179..185. The combat scene starts at (0,0), without the normal level's 24-pixel field offset.
 - `combat-star.png` is the original 3×3 blue cross, retained in its padded source bitmap. The original combat setup places 61 such sprites and 76 single blue pixels into the background. Star arms and the single-pixel stars use RGB (0,0,187); the cross center uses RGB (0,85,255).
-- `assets/audio/*.wav` converts 15 original signed 8-bit Paula samples to unsigned 8-bit mono WAV. Playback rates derive from the original PAL Paula clock (3,546,895 Hz) and the encoded sample periods. Some original events vary these periods at runtime; each exported WAV uses its base period.
+- `assets/audio/*.wav` reconstructs 21 original signed 8-bit Paula playback variants as unsigned 8-bit mono WAV. Some variants share sample bytes but use different source periods. Playback rates derive from the original PAL Paula clock (3,546,895 Hz). Each WAV uses its base period; runtime and offline movie playback apply recovered period changes through the shared `internal/paula` selector.
 
 `assets/manifest.json` records the disk SHA-256, original source filename, byte offsets, bitmap dimensions, visible bounds, palettes, and sound periods. `assets/combat.json` preserves the original boss boundary profile and verified combat constants.
 

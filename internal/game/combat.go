@@ -7,12 +7,15 @@ type CombatShot struct{ X, Y, VX, VY float64 }
 
 // CombatData retains native ship coordinates and both original energy counters.
 type CombatData struct {
-	Number                   int
-	ShipX, ShipY             float64
-	PlayerEnergy, BossEnergy int
-	BossFrame                int
-	PlayerShots, BossShots   []CombatShot
-	Tick                     int
+	Number                                  int
+	ShipX, ShipY                            float64
+	PlayerEnergy, BossEnergy                int
+	BossFrame                               int
+	MouthOpen                               bool
+	PlayerShots, BossShots                  []CombatShot
+	Tick                                    int
+	closedTicks, mouthTimer, mouthDirection int
+	mouthActive                             bool
 }
 
 // SetCombatBoundary installs the original profile, with one entry per four scanlines.
@@ -33,10 +36,11 @@ func (w *World) StartCombat(number int) error {
 }
 
 func (w *World) startCombat() {
+	w.FrameCounter = 0
 	w.State, w.stateTicks, w.combatShotCount, w.combatAimVariant = Combat, 0, 0, false
-	w.Combat = &CombatData{Number: (w.LevelIndex + 1) / 10, ShipX: 16, ShipY: 70, PlayerEnergy: 448, BossEnergy: 896}
+	w.Combat = &CombatData{Number: (w.LevelIndex + 1) / 10, ShipX: 16, ShipY: 75, PlayerEnergy: 448, BossEnergy: 896, mouthDirection: 1}
 	w.Balls, w.Drops, w.Shots, w.Enemies = nil, nil, nil, nil
-	w.emit(CombatStarted, 16, 70, w.Combat.Number, NoEffect)
+	w.soundEvent(CombatStarted, 16, 75, w.Combat.Number, NoEffect, "combat-end", 0x316)
 }
 
 func (w *World) updateCombat(input Input) {
@@ -57,22 +61,26 @@ func (w *World) updateCombat(input Input) {
 		}
 		combat.ShipY = clamp(combat.ShipY, 0, 134)
 	}
-	frames := [...]int{0, 1, 2, 1}
-	combat.BossFrame = frames[(combat.Tick/6)%len(frames)]
+	w.updateCombatMouth()
 	if (input.Fire || input.Launch) && len(combat.PlayerShots) < 16 {
 		combat.PlayerShots = append(combat.PlayerShots, CombatShot{X: 14, Y: combat.ShipY + 12, VX: 3})
-		w.emit(ShotFired, 14, combat.ShipY+12, 0, NoEffect)
+		w.soundEvent(ShotFired, 14, combat.ShipY+12, 0, NoEffect, "combat-fire", 0x244)
 	}
-	if (combat.Tick/6)%4 >= 2 && combat.Tick%4 == 0 {
+	if combat.MouthOpen && combat.Tick%4 == 0 {
 		w.combatShotCount++
-		if w.combatShotCount%3 == 0 {
+		if w.combatShotCount%2 == 0 {
 			w.combatAimVariant = !w.combatAimVariant
 		}
-		velocityY := float64(int(combat.ShipY+16-82)/23) - 1
-		if w.combatAimVariant {
-			velocityY += 2
+		velocityY := float64(int(combat.ShipY+16-82) / 23)
+		if w.combatShotCount%2 == 0 {
+			if w.combatAimVariant {
+				velocityY++
+			} else {
+				velocityY--
+			}
 		}
 		combat.BossShots = append(combat.BossShots, CombatShot{X: 245, Y: 82, VX: -5, VY: velocityY})
+		w.soundEvent(ShotFired, 245, 82, 1, NoEffect, "enemy-fire", 0x31b)
 	}
 	playerShots := combat.PlayerShots[:0]
 	for _, shot := range combat.PlayerShots {
@@ -89,7 +97,7 @@ func (w *World) updateCombat(input Input) {
 					damage = 4
 				}
 				combat.BossEnergy = max(0, combat.BossEnergy-damage)
-				w.emit(CombatHit, shot.X, shot.Y, damage, NoEffect)
+				w.soundEvent(CombatHit, shot.X, shot.Y, damage, NoEffect, "enemy-hit", 0x280)
 			}
 			continue
 		}
@@ -101,13 +109,15 @@ func (w *World) updateCombat(input Input) {
 	bossShots := combat.BossShots[:0]
 	for _, shot := range combat.BossShots {
 		shot.X += shot.VX
-		shot.Y += shot.VY
-		if shot.X >= 4 && shot.X <= 32 && shot.Y >= combat.ShipY && shot.Y <= combat.ShipY+32 {
+		if combat.Tick%2 == 0 {
+			shot.Y += shot.VY
+		}
+		if shot.X > 4 && shot.X <= 32 && shot.Y+12 >= combat.ShipY && shot.Y <= combat.ShipY+32 {
 			combat.PlayerEnergy = max(0, combat.PlayerEnergy-64)
-			w.emit(CombatHit, shot.X, shot.Y, -64, NoEffect)
+			w.soundEvent(CombatHit, shot.X, shot.Y, -64, NoEffect, "enemy-hit", 0x280)
 			continue
 		}
-		if shot.X >= 0 && shot.Y >= 0 && shot.Y < 167 {
+		if shot.X > 4 && shot.Y >= 0 && shot.Y <= 157 {
 			bossShots = append(bossShots, shot)
 		}
 	}
@@ -115,15 +125,51 @@ func (w *World) updateCombat(input Input) {
 	if combat.PlayerEnergy <= 0 {
 		// The original alien encounter ends the run even if brick-round reserves remain.
 		w.State = GameOver
-		w.emit(LifeLost, combat.ShipX, combat.ShipY, 0, NoEffect)
+		w.soundEvent(LifeLost, combat.ShipX, combat.ShipY, 0, NoEffect, "game-over", 0x2cb)
 		return
 	}
 	if combat.BossEnergy <= 0 {
-		w.emit(CombatCompleted, 245, 82, combat.Number, NoEffect)
+		w.soundEvent(CombatCompleted, 245, 82, combat.Number, NoEffect, "game-over", 0x2cb)
 		if w.LevelIndex+1 >= len(w.Levels) {
 			w.State = Won
 		} else {
 			w.loadLevel(w.LevelIndex + 1)
 		}
+	}
+}
+
+func (w *World) updateCombatMouth() {
+	c := w.Combat
+	if !c.mouthActive {
+		c.closedTicks++
+		if c.closedTicks < max(13, c.BossEnergy>>2) {
+			return
+		}
+		c.closedTicks = 0
+		// The source updates the newly active phase on this same PAL update.
+		c.mouthDirection = 1
+		c.mouthActive = true
+	}
+	c.mouthTimer++
+	if c.mouthTimer <= 5 {
+		return
+	}
+	c.mouthTimer = 0
+	c.BossFrame += c.mouthDirection
+	if c.BossFrame == 0 {
+		c.MouthOpen = false
+		c.mouthActive = false
+		c.mouthDirection = 1
+		return
+	}
+	if c.BossFrame == 2 {
+		c.MouthOpen = true
+		d := -((57 - (c.BossEnergy >> 4)) >> 1)
+		d += d >> 1
+		if c.Number != 6 {
+			d >>= 2
+		}
+		c.mouthTimer = d
+		c.mouthDirection = -1
 	}
 }

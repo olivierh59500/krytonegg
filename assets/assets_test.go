@@ -61,8 +61,8 @@ func TestEffectsPreservePaulaSamples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(metadata.Sounds) != 15 {
-		t.Fatalf("expected 15 original samples, got %d", len(metadata.Sounds))
+	if len(metadata.Sounds) != 21 {
+		t.Fatalf("expected 21 recovered original playback variants, got %d", len(metadata.Sounds))
 	}
 	for name, info := range metadata.Sounds {
 		t.Run(name, func(t *testing.T) {

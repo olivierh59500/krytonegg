@@ -16,6 +16,8 @@ type touchButton struct {
 	label string
 }
 
+const touchCredits touch.Action = touch.Back + 1
+
 func button(action touch.Action, label string, x, y, w, h float64) touchButton {
 	return touchButton{Button: touch.Button{Action: action, Bounds: touch.Rect{X: x, Y: y, W: w, H: h}}, label: label}
 }
@@ -30,7 +32,17 @@ func (a *App) layout(width, height int) {
 
 // The sidebar lies outside the original 320x200 field, so it never covers a ball.
 func (a *App) touchButtons() []touchButton {
-	if a.help || a.scores {
+	if a.introActive() || a.nameActive() || a.interludeActive() || a.levelBanner {
+		label := "NEXT"
+		if a.nameActive() {
+			label = "OK"
+		}
+		return []touchButton{
+			button(touch.Back, "BACK", 324, 8, 72, 36), button(touch.Fire, label, 324, 52, 72, 56),
+			button(touch.Sound, "SOUND", 324, 116, 72, 36), button(touch.Menu, "MENU", 324, 160, 72, 36),
+		}
+	}
+	if a.help || a.scores || a.credits {
 		return []touchButton{
 			button(touch.Back, "BACK", 324, 8, 72, 36), button(touch.Sound, "SOUND", 324, 116, 72, 36),
 			button(touch.Menu, "MENU", 324, 160, 72, 36), button(touch.Back, "", 0, 0, 320, 200),
@@ -70,6 +82,7 @@ func (a *App) touchButtons() []touchButton {
 			button(touch.Play, "", 96, 64, 128, 32), button(touch.Scores, "", 96, 116, 128, 29),
 			button(touch.Editor, "", 16, 145, 144, 24), button(touch.Help, "", 160, 145, 144, 24),
 			button(touch.RoundPrev, "PREV", 16, 98, 48, 32), button(touch.RoundNext, "NEXT", 256, 98, 48, 32),
+			button(touchCredits, "", 40, 165, 240, 35),
 		)
 	} else if a.world.State == game.GameOver || a.world.State == game.Won {
 		buttons = append(buttons, button(touch.Play, "", 0, 112, 320, 88))
@@ -98,7 +111,7 @@ func (a *App) sampleTouches() {
 	if a.editor {
 		mode = touch.ModePaint
 	}
-	if a.help || a.scores {
+	if a.help || a.scores || a.credits || a.introActive() || a.nameActive() || a.interludeActive() || a.levelBanner {
 		mode = touch.ModeMenu
 	}
 	x, y := a.world.Paddle.X, a.world.Paddle.Y
@@ -145,6 +158,9 @@ func (a *App) touchActions() bool {
 			a.scores = true
 			a.audio.Music("halloffame")
 			consumed = true
+		case touchCredits:
+			a.credits = true
+			consumed = true
 		case touch.Editor:
 			a.openEditor()
 			consumed = true
@@ -158,10 +174,9 @@ func (a *App) touchActions() bool {
 			} else {
 				a.world.Restart()
 			}
+			a.runScoreRecorded = false
 			a.audio.Music("")
-			for _, event := range a.world.Events {
-				a.audio.Event(event)
-			}
+			a.consumeEvents()
 			consumed = true
 		}
 		// Button ownership was resolved against the previous screen. Apply one
@@ -192,6 +207,23 @@ func (a *App) Suspend() {
 
 // Back closes overlays and tests, then pauses gameplay or returns to the title.
 func (a *App) Back() {
+	if a.nameActive() {
+		if err := a.presentation.FinishName(); err != nil {
+			a.message, a.messageTicks = "SCORE SAVE FAILED", 180
+		}
+		a.highScore = a.presentation.Table.Best()
+		a.scores = true
+		return
+	}
+	if a.introActive() {
+		a.presentation.SkipIntro()
+		return
+	}
+	if a.interludeActive() {
+		a.presentation.Interlude.Active = false
+		a.offerRunScore()
+		return
+	}
 	if a.help {
 		a.help = false
 		if a.helpResume {
@@ -201,9 +233,8 @@ func (a *App) Back() {
 		a.audio.SetPaused(a.world.State == game.Paused)
 		return
 	}
-	if a.scores {
-		a.scores = false
-		a.menuScores = false
+	if a.scores || a.credits {
+		a.closeOverlay()
 		return
 	}
 	if a.testing {
@@ -225,7 +256,9 @@ func (a *App) Back() {
 }
 
 // AtTitle supports Android's standard Back-to-exit behavior without sharing game state.
-func (a *App) AtTitle() bool { return a.world.State == game.Title && !a.editor && !a.scores && !a.help }
+func (a *App) AtTitle() bool {
+	return a.world.State == game.Title && !a.editor && !a.scores && !a.help && !a.credits && !a.introActive() && !a.nameActive() && !a.interludeActive()
+}
 
 // VerificationDone allows an Android check to hold a frame rather than exit its view.
 func (a *App) VerificationDone() bool {

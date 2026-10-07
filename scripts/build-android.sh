@@ -19,6 +19,7 @@ done
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/android-env.sh"
 cd "$project_root"
+python3 "$project_root/tools/prepare_assets.py"
 mkdir -p android/app/libs "$GOPATH" "$GOMODCACHE" "$GOCACHE" "$GRADLE_USER_HOME" "$ANDROID_USER_HOME"
 
 module_ebiten_version=$(go list -m -f '{{.Version}}' github.com/hajimehoshi/ebiten/v2)

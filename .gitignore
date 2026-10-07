@@ -10,6 +10,17 @@
 __pycache__/
 *.pyc
 
+# The reference disk and all reconstructed game data are local-only inputs.
+/previous/
+/assets/*
+!/assets/*.go
+!/assets/README.md
+/android/app/src/main/res/drawable-nodpi/ic_launcher.png
+
+# Presentation movie exports are local artifacts; README screenshots are review material.
+/docs/media/*.mp4
+/docs/media/*.wav
+
 # Android build output and machine-specific SDK locations.
 /android/.gradle/
 /android/build/

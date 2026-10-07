@@ -23,11 +23,35 @@ func main() {
 	flag.BoolVar(&options.Fullscreen, "fullscreen", false, "start in fullscreen")
 	flag.BoolVar(&options.Editor, "editor", false, "open the construction set")
 	flag.BoolVar(&options.Mobile, "touch", false, "preview the Android touch controls on desktop")
+	flag.BoolVar(&options.Expert, "expert", false, "use a bounded simulated expert player")
+	flag.BoolVar(&options.Showcase, "showcase", false, "run the four-minute presentation with options and genuine expert play")
+	flag.StringVar(&options.Movie, "movie", "", "record actual Ebitengine frames and offline original audio to an MP4")
+	flag.IntVar(&options.MovieTicks, "movie-ticks", 0, "record this many PAL updates; movie default is 12000 (four minutes)")
+	flag.Float64Var(&options.PlayerSpeed, "player-speed", 10, "simulated player's maximum native pixels per PAL update")
+	flag.IntVar(&options.PlayerReaction, "player-reaction", 5, "simulated player's observation delay in PAL updates")
 	flag.StringVar(&options.CustomLevel, "custom", "", "play an original-format 576-byte custom level")
 	flag.StringVar(&options.DataDir, "data-dir", "", "directory for local high scores and custom levels")
 	flag.IntVar(&options.SmokeTicks, "smoke", 0, "run an automatic check and exit after this many updates")
 	flag.StringVar(&options.Capture, "capture", "", "save the final smoke-check frame as a PNG")
 	flag.Parse()
+	if options.PlayerSpeed <= 0 || options.PlayerSpeed > 30 || options.PlayerReaction < 1 || options.PlayerReaction > 50 {
+		log.Fatal("player speed must be in (0,30] and reaction delay in [1,50] PAL updates")
+	}
+	if options.Showcase {
+		options.Expert = true
+	}
+	if options.Expert && options.SmokeTicks > 0 {
+		log.Fatal("expert playback and smoke input are separate validation modes")
+	}
+	if options.Movie != "" && options.MovieTicks == 0 {
+		options.MovieTicks = 12000
+	}
+	if options.Movie != "" {
+		options.Muted = true
+	}
+	if options.MovieTicks < 0 || (options.MovieTicks > 0 && options.Movie == "") {
+		log.Fatal("movie-ticks requires a movie path and a nonnegative update count")
+	}
 	if options.Scale < 1 || options.Scale > 12 {
 		log.Fatal("scale must be between 1 and 12")
 	}
@@ -57,7 +81,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer app.Close()
 	ebiten.SetWindowTitle("Krypton Egg — Go / Ebitengine")
 	windowWidth := 320
 	if options.Mobile {
@@ -67,8 +90,16 @@ func main() {
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetFullscreen(options.Fullscreen)
 	ebiten.SetScreenFilterEnabled(false)
+	if options.Expert || options.Showcase || options.Movie != "" {
+		ebiten.SetRunnableOnUnfocused(true)
+	}
 	ebiten.SetTPS(50)
-	if err := ebiten.RunGame(app); err != nil {
+	runError := ebiten.RunGame(app)
+	app.Close()
+	if runError != nil {
+		log.Fatal(runError)
+	}
+	if err := app.ExportError(); err != nil {
 		log.Fatal(err)
 	}
 	if options.SmokeTicks > 0 {

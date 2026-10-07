@@ -1,110 +1,155 @@
 # Port status
 
-The game runs as a native Go application using Ebitengine. The simulation,
-input, drawing, audio integration, menus, editor, and persistence are rewritten
-Go code. Original machine code is not executed at runtime.
+The game is a native Go application using Ebitengine. Simulation, input,
+rendering, menus, construction tools, persistence, and audio integration are
+rewritten Go code. Original instructions are neither executed nor interpreted
+at runtime. The compiled application embeds data reconstructed from the user's
+local original ADF.
 
-## Implemented
+## Implemented model and presentation
 
-- All 60 original brick arrangements load from the supplied disk's unchanged
-  18 by 16 big-endian table. Layered bricks retain their original tile IDs,
-  embedded bonus identifiers, and two-bit strength values.
-- The six original horizontal combats follow rounds 10, 20, 30, 40, 50, and
-  60. They use original boss, ship, projectile, background, and meter artwork,
-  plus recovered boss boundary, health, movement, damage, and shot constants.
-- Original source images, transparent sprites, textures, bitmap fonts,
-  15 Paula sound samples, and both tracker songs are embedded. The asset
-  converter records their source locations and reproduces the conversions
-  from the supplied ADF.
-- Normal and magnetic paddles, weapon paddles, ball sizes, super balls,
-  ghost balls, bonuses, enemies, the opening door, and destruction effects
-  use the original sprite banks. Native collision dimensions are kept
-  separate from transparent sprite padding and decorative outlines.
-- The original bonus dispatch identifiers implement growth, sensitivity,
-  score multiplication, reversed controls, magnetic catches, reserves,
-  extra balls, enlargement, darkness, speed changes, autopilot, vertical
-  movement, ghost effects, shields, cannons, random selection, shrinkage,
-  and four combinable weapon modes. Identifier 5 remains inert because its
-  source flag has no identified consumer.
-- Enemies use the original per-round four-choice table, paddle-coordinate
-  selection, dimensions, animation periods, direction changes, contact
-  flags, and capacity limits. The opening-door cadence is derived from the
-  original instruction sequence.
-- Scoring retains the recovered unsigned 16-bit behavior, score multiplier,
-  reserve awards at 2,048-point thresholds, and four reserves plus the active
-  ship at the start of a run.
-- Play, scores, pause, help, game-over, and campaign-completion paths are
-  implemented. Original Space, F1, F2, and F3 actions are supported, with
-  additional keyboard, touch, gamepad, fullscreen, and mute controls.
-- The construction screen edits original tile codes, attaches bonuses,
-  saves and loads a 576-byte level, and tests it. Leaving a test restores the
-  campaign rather than replacing it with the test level.
-- Desktop presentation defaults to a 1,280 by 800 window with nearest-neighbor,
-  integer scaling. Resizing preserves the original 320 by 200 composition
-  through centered letterboxing. Simulation positions retain fractional
-  precision at higher output resolutions.
-- An ARM64 Android APK runs the same Go game and go-zikmu audio integration on
-  API 23 or newer. Relative field dragging and independent fire controls share
-  a 400 by 200 view with an original-art sidebar. Uniform fractional scaling
-  fits landscape screens; title navigation and the editor work with touch.
-  Android lifecycle suspension stops the view and audio, and local saves use
-  the application's private files directory.
-- Fixed seeds permit reproducible simulation. Command-line round and combat
-  selection, automatic update runs, and PNG capture support review.
+- All 60 unchanged 18 by 16 original layouts retain tile identifiers, layered
+  strength, encoded bonuses, permanent and regenerating obstacles, and paired
+  teleporters. The six original alien encounters follow each group of ten
+  rounds, with recovered ship, mouth, projectile, damage, and energy rules.
+- Ball velocities retain native integer rules for brick, paddle, enemy,
+  multiball, and speed-bonus responses. The modern collision solver subdivides
+  motion using floating-point positions. Original paddle movement contributes
+  to rebounds, and vertical steering requires the original flying bonus.
+- Recovered bonus dispatch covers size and sensitivity, reversed controls,
+  magnet, score multiplication, reserves and extra balls, darkness, speed,
+  autopilot, vertical movement, ghost effects, shields, cannons, random
+  selection, super balls, and combinable weapons. Identifier 5 remains inert
+  because no consumer of its source flag has been identified.
+- Enemies use original round selections, shared counters, movement and lethal
+  flags, scratch drawing offsets, capacity limits, and death frames. The door
+  follows recovered native cadence. Paddle destruction decreases its width
+  slot once per update and consumes the reserve after the original animation.
+- Scoring wraps as an unsigned 16-bit value. Reserve awards use recovered
+  2,048-point thresholds; a run starts with four reserves and the active ship.
+  The Hall of Fame deliberately retains the source's signed-word ranking
+  limitation while rendering scores as unsigned decimal values.
+- The original folded intro reveal, scrolling instructions, animated menu
+  colors and selection palettes, copyright screen, and zero-based LEVEL
+  banner are implemented. The banner is acknowledged before paddle creation
+  and the separate ball release. Backgrounds follow the persistent original
+  83-entry cursor. Darkness halves original color nibbles across the game field.
+- The Hall of Fame displays ten original named defaults using its source font
+  and palette. A qualifying completed or F3-ended run requests a name before
+  insertion. Native keyboard and touch entry accept sixteen characters; longer
+  disk defaults are retained. Local JSON saves are atomic, and the earlier
+  single-score file migrates without discarding the defaults.
+- Original victory clues and combat-loss text use the recovered monochrome
+  font from the final 688 bytes of `final.bmp` and its rotating palette. The supplied cracked release always selects its
+  sixth clue at final victory; no alternate final-scene branch was found in
+  that disk's completion path.
+- Original graphics, masks, textures, fonts, tracker modules, and 21 recovered
+  WAV playback variants are used. Live and offline sound share recovered
+  event selection, native period changes, newest-first queue ordering, four
+  replacing Paula-style channels, and stereo channel placement. Tracker music
+  is decoded and mixed in pure Go by `go-zikmu`.
+- Optional original keyboard codes require explicit manual startup authorization
+  with Insert and the held left mouse button during the intro. Their reserve,
+  round-selection, final-encounter, and boss-energy functions are available only
+  in normal manual play. Expert, showcase, smoke, and all movie modes forcibly
+  disable them; they are not used by progression validation or presentation.
+- The construction set paints original tile codes and bonus strengths, saves
+  and reloads the unchanged 576-byte format, and tests a custom level. Returning
+  from a test restores the campaign and preserves the editor's work.
+- Desktop output defaults to 1,280 by 800 with nearest-neighbor integer scaling
+  and centered letterboxing around the original 320 by 200 composition.
+  Keyboard, mouse, gamepad, pause, fullscreen, and mute controls are available.
+- Android shares the Go game and adds relative field dragging, independent
+  fire, navigation, name entry, and construction controls in a 400 by 200
+  composition. Saves use private application storage; lifecycle suspension
+  pauses an active round until the player resumes it.
+- A deterministic simulated expert submits ordinary inputs with delayed
+  observations and bounded speed and acceleration. It does not move balls,
+  remove bricks, grant bonuses, award reserves, or alter boss energy. Headless
+  campaign and labelled practice reports use the same simulation update path.
+- Native video capture streams Ebitengine's actual surface into H.264. Original
+  audio is rendered offline while live playback remains muted. MP4/AAC output,
+  English SRT and text tracks, and optional captions below the game viewport
+  are implemented without desktop, microphone, or system-audio capture.
 
-## Adaptations and remaining differences
+## Comparison and remaining limits
 
-Recovered constants and unchanged assets establish provenance and substantial
-behavioral fidelity. They do not establish a cycle-exact emulator replacement.
-The rewritten collision solver subdivides motion, resolves circle/rectangle
-contacts, and uses floating-point positions. This deliberate adaptation
-prevents fast balls from crossing thin bricks between collision checks.
-Original rebound and paddle-motion constants inform the implementation, but
-corner contacts, simultaneous hits, and fine timing can differ.
+FS-UAE and Ghidra inspection established the source of the recovered assets,
+constants, presentation sequences, and concrete corrections. A registered
+first-round comparison matched every sampled pixel in the visible top grid;
+93.68% of the larger unoccluded field agreed. This comparison used a fractionally
+scaled emulator window capture with selected UI areas excluded. It supports
+art, palette, arrangement, and placement fidelity; it is not a general claim
+of a bit-perfect or cycle-exact replacement.
 
-Several presentation and persistence details remain simplified:
+The floating-point collision subdivision remains a deliberate adaptation.
+Corner choices, simultaneous contacts, original raster polling, exact hardware
+interrupt timing, and every bonus combination have not been proven equivalent
+frame by frame. Combat stars and raster-dependent sound variation use seeded
+native randomness instead of the Amiga's current beam position. Paula queue
+scheduling is represented per update, and software resampling and output gain
+adapt playback to the host audio system.
 
-- The menu's copper-driven moving colors are represented by a static decoded
-  image. The original animated introductory reveal is not reproduced.
-- The local score file stores one best score. The original named ten-entry
-  hall-of-fame workflow is not reproduced.
-- Original post-boss screens that progressively reveal cheat instructions
-  are omitted; combat victory advances the campaign directly.
-- Combat star placement uses the selected replay seed in place of original
-  raster-timing randomness. Background selection uses the current round's
-  position in the recovered texture bank rather than reproducing the
-  complete original runtime texture-selection state.
-- WAV files use recovered base sample periods. Events that changed Paula
-  sample periods dynamically in the original do not all vary pitch here.
-- The construction screen preserves the original level format and art while
-  providing new mouse, keyboard, and touch interactions.
+Keyboard and touch name entry, JSON persistence, modern construction controls,
+additional help text, and phone navigation adapt the original interactions.
+The simulated expert observes exact game geometry and decoded bonus identities;
+these are generous perception assumptions for a controlled gameplay validator.
 
-These differences should remain visible in fidelity claims. Original gameplay
-video and disk-derived evidence are described in
-[original-reference.md](original-reference.md); asset formats and recovered
-constants are described in [asset-extraction.md](asset-extraction.md).
+The final-source ordinary campaign audit completed all sixty rounds and six
+encounters through submitted inputs, with original codes disabled throughout.
+[validation.json](validation.json) records the canonical seed 42, an 80 ms
+observation delay, a maximum 600 native pixels/second, and acceleration limited
+to two pixels/update squared. Both repeated runs cleared the same 66 stages
+with matching stage records. The first round took 81.12 simulated seconds;
+the complete audit totals 11,479.96 simulated seconds and ends with 21 lives.
+Each boss encounter ended with 448 player energy. The local full replay is
+`captures/progression/campaign.json`; [progression.md](progression.md) explains
+its input-only scope and reproduction.
 
-## Validation scope
+Loading layouts, passing unit tests, winning separately selected practice
+fights, and producing a movie remain distinct from that ordinary campaign
+check. Neither the successful native audit nor a presentation movie proves
+frame-for-frame equivalence with the Amiga executable.
 
-Headless tests cover original level decoding, campaign indexing, deterministic
-state, brick layering and regeneration, fast-ball and corner collisions,
-paddle response, multiball life handling, bonus dispatch and strength,
-enemy contacts, combat transitions and damage, native counters, and tracker
-audio decoding. They establish the implemented rules' consistency, rather
-than proving frame-for-frame equivalence with the Amiga.
+## Validation and reproducibility
 
-Native smoke runs and captures exercise application startup, graphics, audio
-initialization, and automatic updates. The printed smoke report records the
-resulting world state; it is not a claim that every campaign round was cleared
-or that every original behavior was verified.
+Package tests cover source decoding, deterministic state and input ownership,
+native counters and rebounds, collisions, brick layering and regeneration,
+bonus dispatch, enemy and combat behavior, reserve timing, touch interaction,
+named scores, presentation clocks, tracker audio, sample selection and channel
+replacement, video clocks, and actual H.264/AAC/subtitle muxing. Native smoke
+captures exercise the Ebitengine render. A two-second presentation prototype
+contains exactly 100 native 1,280 by 800 frames at 50 fps, synchronized AAC,
+and an English text track. Its captioned version retains those frames and adds
+only a 112-pixel footer. The final canonical four-minute presentation contains
+exactly 12,000 actual Ebitengine frames at 50 fps, synchronized AAC audio, and
+an English text subtitle track. Its captioned version is 1,280 by 912 pixels;
+the game remains 1,280 by 800 and the subtitles occupy the additional footer.
+Visual checks cover the original intro and menu, named scores, readable help,
+the construction set, Android controls, continuous campaign footage, the boss,
+and its corrected original-font victory message. The movie uses the same seed,
+reaction delay, speed and acceleration limits as the canonical controller.
+The complete 60-round campaign proof remains separate from the four-minute
+presentation, whose last encounter is explicitly labelled as practice.
 
-The Android APK was installed and tested on a Google Pixel 10a running API 37.
-Device checks verified relative movement without unintended launch, firing,
-scores and Back navigation, stable pause captures, Home/return behavior, editor
-painting and its original-format save, returning from a custom-level test,
-and a 45-update alien-combat render. Android audio initialization completed
-successfully. Headless touch and presentation tests cover simultaneous fingers,
-gesture ownership, reversed-control reanchoring, and editor reload behavior;
-physical automation used single-pointer ADB gestures. Package checks validate
-the signature, metadata, and 16 KiB archive and native-library alignment.
-See [android.md](android.md) for builds, controls, and detailed verification.
+The earlier Android APK was installed and checked on a Google Pixel 10a running
+API 37. That session verified movement, firing, pause, Back, Home/return, editor
+save/reload, and a combat render. Those observations predate the latest source
+fidelity corrections; a newly built APK must be distinguished from that earlier
+device check. [android.md](android.md) records the platform workflow and checks.
+
+The ADF, `previous/`, `.DS_Store`, converted PNG/WAV files, raw disk data, generated
+metadata, modules, launcher artwork, and reverse-engineering caches are excluded
+from Git. The requested cleanup removed forbidden data from the three existing
+historical revisions and pruned 496 original asset objects. The subsequent audit
+found no forbidden paths in reachable history. Recovery scripts and Go embedding
+code remain versioned; README review screenshots are rendered captures, rather
+than extracted source asset files. `tools/scrub_git_history.py --audit` repeats
+that path audit without changing the repository.
+
+Set `KRYTONEGG_ADF` to the local disk and run `make assets` to reconstruct the
+ignored data. `make build`, `make test`, and the Android build check the current
+asset recipe automatically. The recording workflow is documented in
+[presentation.md](presentation.md); source evidence and comparison limits are
+in [fidelity-audit.md](fidelity-audit.md) and
+[asset-extraction.md](asset-extraction.md).

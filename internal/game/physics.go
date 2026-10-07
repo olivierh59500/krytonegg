@@ -8,6 +8,9 @@ func (w *World) updateBalls() {
 	live := w.Balls[:0]
 	for _, source := range w.Balls {
 		ball := source
+		if ball.Attached {
+			w.collideEnemies(&ball)
+		}
 		if !ball.Attached {
 			steps := int(math.Ceil(math.Max(math.Abs(ball.VX), math.Abs(ball.VY)) / 0.75))
 			if steps < 1 {
@@ -32,13 +35,13 @@ func (w *World) updateBalls() {
 					if brick.Destroyed || brick.Kind == 0xf8 || brick.Kind == 0xf9 {
 						continue
 					}
-					nx, ny, depth, collision := circleRect(ball.X, ball.Y, ball.Radius, brick.X, brick.Y, brick.W, brick.H)
+					nx, ny, depth, collision := brickContact(ball.X, ball.Y, ball.Radius, brick.X, brick.Y, brick.W, brick.H)
 					if !collision {
 						continue
 					}
-					if w.Active(SuperBall) && brick.Destructible {
+					if w.Active(SuperBall) {
 						if !hit[i] {
-							w.damageBrick(i)
+							w.damageSuperBrick(i)
 							hit[i] = true
 						}
 						continue
@@ -47,8 +50,11 @@ func (w *World) updateBalls() {
 					ball.Y += ny * (depth + 0.001)
 					approach := ball.VX*nx + ball.VY*ny
 					if approach < 0 {
-						ball.VX -= 2 * approach * nx
-						ball.VY -= 2 * approach * ny
+						if nx != 0 {
+							ball.VX = -ball.VX
+						} else {
+							ball.VY = -ball.VY
+						}
 						if !hit[i] {
 							w.damageBrick(i)
 							hit[i] = true
@@ -69,7 +75,46 @@ func (w *World) updateBalls() {
 	w.Balls = live
 }
 
+func (w *World) damageSuperBrick(index int) {
+	brick := &w.Bricks[index]
+	if brick.Destroyed {
+		return
+	}
+	if brick.Kind == 0xf8 || brick.Kind == 0xf9 {
+		return
+	}
+	if brick.Destructible {
+		brick.HP = 1
+		w.damageBrick(index)
+		return
+	}
+	brick.Destroyed, brick.TemporaryTimer = true, 0
+	w.soundEvent(BrickBreak, brick.X+brick.W/2, brick.Y+brick.H/2, brick.Kind, NoEffect, "brick-alt", 0x271+int(w.TickCount&15)*16)
+}
+
+// brickContact preserves the native one-axis rebound. Fractional positions are
+// retained for subdivision, but contact never rotates or attenuates velocity.
+func brickContact(cx, cy, r, x, y, width, height float64) (nx, ny, depth float64, hit bool) {
+	nx, ny, _, hit = circleRect(cx, cy, r, x, y, width, height)
+	if !hit {
+		return 0, 0, 0, false
+	}
+	if math.Abs(nx) > math.Abs(ny) {
+		if nx < 0 {
+			return -1, 0, cx - (x - r), true
+		}
+		return 1, 0, x + width + r - cx, true
+	}
+	if ny < 0 {
+		return 0, -1, cy - (y - r), true
+	}
+	return 0, 1, y + height + r - cy, true
+}
+
 func (w *World) collidePortals(ball *Ball) {
+	if w.Active(GhostBall) {
+		return
+	}
 	for i, source := range w.Portals {
 		_, _, _, collision := circleRect(ball.X, ball.Y, ball.Radius, source.X-8, source.Y-4, 16, 8)
 		if !collision {
@@ -79,6 +124,7 @@ func (w *World) collidePortals(ball *Ball) {
 			if i != j && source.Kind != target.Kind {
 				ball.X = target.X - 8 + math.Copysign(16, ball.VX) + ball.Radius
 				ball.Y = target.Y - 4 + math.Copysign(8, ball.VY) + ball.Radius
+				w.soundEvent(Bounce, ball.X, ball.Y, 3, NoEffect, "teleport", 0x5dc)
 				return
 			}
 		}
@@ -86,30 +132,27 @@ func (w *World) collidePortals(ball *Ball) {
 }
 
 func (w *World) collideWalls(ball *Ball) {
-	bounced := false
+	increment := (int(ball.Radius*2) >> 1) - 2
 	if ball.X-ball.Radius < FieldLeft {
 		ball.X = FieldLeft + ball.Radius
 		if ball.VX < 0 {
 			ball.VX = -ball.VX
-			bounced = true
+			w.soundEvent(Bounce, ball.X, ball.Y, 0, NoEffect, "wall", 0x32f+(increment<<6))
 		}
 	}
 	if ball.X+ball.Radius > FieldRight {
 		ball.X = FieldRight - ball.Radius
 		if ball.VX > 0 {
 			ball.VX = -ball.VX
-			bounced = true
+			w.soundEvent(Bounce, ball.X, ball.Y, 0, NoEffect, "wall", 0x32f+(increment<<6))
 		}
 	}
 	if ball.Y-ball.Radius < FieldTop {
 		ball.Y = FieldTop + ball.Radius
 		if ball.VY < 0 {
 			ball.VY = -ball.VY
-			bounced = true
+			w.soundEvent(Bounce, ball.X, ball.Y, 0, NoEffect, "ceiling", 0x267+(increment<<6))
 		}
-	}
-	if bounced {
-		w.emit(Bounce, ball.X, ball.Y, 0, NoEffect)
 	}
 }
 
@@ -131,6 +174,7 @@ func (w *World) collidePaddleShape(ball *Ball, paddle Paddle, main bool) {
 		return
 	}
 	ball.Y = paddle.Y - paddle.H/2 - ball.Radius - 0.01
+	edge := false
 	if main && w.Active(Sticky) {
 		ball.Attached = true
 		ball.AttachedOffset = clamp(ball.X-paddle.X, -paddle.W/2+ball.Radius, paddle.W/2-ball.Radius)
@@ -139,6 +183,7 @@ func (w *World) collidePaddleShape(ball *Ball, paddle Paddle, main bool) {
 		left, right := paddle.X-paddle.W/2, paddle.X+paddle.W/2
 		if ball.X < left+4 && ball.VX > 0 || ball.X > right-4 && ball.VX < 0 {
 			ball.VX = -ball.VX
+			edge = true
 		}
 		ball.VY = -ball.VY
 		if main {
@@ -146,7 +191,14 @@ func (w *World) collidePaddleShape(ball *Ball, paddle Paddle, main bool) {
 			ball.VX = clamp(ball.VX+float64(movement>>1), -3, 3)
 		}
 	}
-	w.emit(Bounce, ball.X, ball.Y, 1, NoEffect)
+	sound, period := "paddle", 0x29e+(((int(ball.Radius*2)>>1)-2)<<5)
+	if edge {
+		sound, period = "paddle-edge", 0x2cb
+	}
+	if !main {
+		sound, period = "teleport", 0x4b0
+	}
+	w.soundEvent(Bounce, ball.X, ball.Y, 1, NoEffect, sound, period)
 }
 
 // circleRect returns the outward contact normal and the required separation.
@@ -215,6 +267,8 @@ func (w *World) damageBrick(index int) {
 	brick.HP--
 	w.emit(BrickHit, brick.X+brick.W/2, brick.Y+brick.H/2, brick.HP, NoEffect)
 	if brick.HP > 0 {
+		w.Events[len(w.Events)-1].Sound = "brick"
+		w.Events[len(w.Events)-1].Period = 0x226 + int(w.TickCount&31)*32
 		if brick.Kind >= 0x11 && brick.Kind <= 0x30 || brick.Kind >= 0x41 && brick.Kind <= 0x60 {
 			brick.Kind -= 0x10
 		}
@@ -224,8 +278,18 @@ func (w *World) damageBrick(index int) {
 	// Native scoring uses a 16-bit accumulator and a six-bit 68000 shift count.
 	award := uint16(uint64(brick.Score) << uint(w.ScoreMultiplier&63))
 	w.Score = int(uint16(w.Score) + award)
-	w.emit(BrickBreak, brick.X+brick.W/2, brick.Y+brick.H/2, brick.Kind, brick.Bonus)
+	threshold := w.Score >> 11
+	if threshold > w.scoreLifeThreshold {
+		w.scoreLifeThreshold = threshold
+		w.Lives++
+		w.soundEvent(ReserveEarned, w.Paddle.X, w.Paddle.Y, w.Lives, ExtraLife, "extra-life", 0x226)
+	}
 	rawKind := int(brick.Code & 0xff)
+	sound, period := "brick", 0x226+int(w.TickCount&31)*32
+	if rawKind >= 0x31 && rawKind <= 0x60 {
+		sound, period = "bonus-brick", 0x311
+	}
+	w.soundEvent(BrickBreak, brick.X+brick.W/2, brick.Y+brick.H/2, brick.Kind, brick.Bonus, sound, period)
 	if brick.Bonus != NoEffect || rawKind >= 0x31 && rawKind <= 0x60 {
 		drop := Drop{X: brick.X + brick.W/2, Y: brick.Y + brick.H/2, VY: 1, Kind: brick.Bonus, Code: uint8(brick.Code >> 8), Power: brick.BonusPower, Tile: brick.Kind}
 		w.Drops = append(w.Drops, drop)
@@ -242,7 +306,7 @@ func (w *World) updateBricks() {
 		if brick.TemporaryTimer <= 0 {
 			continue
 		}
-		if (brick.Kind < 0xe1 || brick.Kind > 0xf0) && w.TickCount%4 != 0 {
+		if (brick.Kind < 0xe1 || brick.Kind > 0xf0) && w.FrameCounter%4 != 0 {
 			continue
 		}
 		brick.TemporaryTimer--
@@ -291,7 +355,16 @@ func (w *World) fire() {
 		width = 13
 	}
 	w.Shots = append(w.Shots, Shot{X: w.Paddle.X, Y: w.Paddle.Y - w.Paddle.H/2, VY: velocity, Rocket: rocket, Cannon: cannon, Width: width})
-	w.emit(ShotFired, w.Paddle.X, w.Paddle.Y, 0, NoEffect)
+	sound, period := "cannon-fire", 0x2f8
+	if cannon {
+		sound, period = "enemy-fire", 0x31b
+		if w.Active(EnhancedCannon) {
+			period -= 0x50
+		}
+	} else if w.WeaponMode&(4|8) != 0 {
+		period -= 0xa0
+	}
+	w.soundEvent(ShotFired, w.Paddle.X, w.Paddle.Y, 0, NoEffect, sound, period)
 }
 
 func (w *World) updateShots() {
@@ -305,8 +378,8 @@ func (w *World) updateShots() {
 		for i := range w.Enemies {
 			enemy := &w.Enemies[i]
 			if !enemy.Destroyed && shot.X+shot.Width/2 >= enemy.X && shot.X-shot.Width/2 <= enemy.X+enemy.W && shot.Y <= enemy.Y+enemy.H && shot.Y-shot.VY >= enemy.Y {
-				enemy.Destroyed, hitEnemy = true, true
-				w.emit(EnemyHit, enemy.X+enemy.W/2, enemy.Y+enemy.H/2, enemy.Kind, NoEffect)
+				w.beginEnemyDeath(enemy)
+				hitEnemy = true
 				break
 			}
 		}
@@ -315,6 +388,9 @@ func (w *World) updateShots() {
 		}
 		hit := -1
 		for i, brick := range w.Bricks {
+			if (brick.Kind == 0xf8 || brick.Kind == 0xf9) && shot.Y < brick.Y {
+				continue
+			}
 			if !brick.Destroyed && shot.X+shot.Width/2 >= brick.X && shot.X-shot.Width/2 <= brick.X+brick.W && shot.Y <= brick.Y+brick.H && shot.Y-shot.VY >= brick.Y {
 				if hit < 0 || brick.Y > w.Bricks[hit].Y {
 					hit = i
@@ -325,10 +401,22 @@ func (w *World) updateShots() {
 			live = append(live, shot)
 			continue
 		}
-		if shot.Cannon && w.Bricks[hit].Destructible {
-			w.Bricks[hit].HP = 1
+		if shot.Cannon {
+			if w.Bricks[hit].Kind == 0xf8 || w.Bricks[hit].Kind == 0xf9 {
+				for _, portal := range w.Portals {
+					if portal.Kind != w.Bricks[hit].Kind {
+						shot.X, shot.Y = portal.X-8+shot.Width/2, portal.Y-4
+						break
+					}
+				}
+			} else {
+				w.damageSuperBrick(hit)
+			}
+			// Native cannons pierce complete brick layers and permanent obstacles.
+			live = append(live, shot)
+		} else {
+			w.damageBrick(hit)
 		}
-		w.damageBrick(hit)
 		if shot.Rocket {
 			centerX, centerY := w.Bricks[hit].X+w.Bricks[hit].W/2, w.Bricks[hit].Y+w.Bricks[hit].H/2
 			for i, brick := range w.Bricks {

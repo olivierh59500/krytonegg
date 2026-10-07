@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -15,28 +16,45 @@ import (
 
 	"krytonegg/assets"
 	"krytonegg/internal/game"
+	"krytonegg/internal/paula"
 )
 
-const sampleRate = 44100
+const sampleRate = paula.SampleRate
 
 // Audio owns one Ebitengine context and two original ProTracker songs.
 type Audio struct {
-	context *audio.Context
-	music   map[string]*ebitenaudio.Player
-	current string
-	muted   bool
-	paused  bool
-	samples map[string][]byte
-	voices  []*audio.Player
+	context     *audio.Context
+	music       map[string]*ebitenaudio.Player
+	current     string
+	muted       bool
+	paused      bool
+	samples     map[string][]byte
+	playback    map[effectKey][]byte
+	selector    *paula.SampleSelector
+	voices      [4]*audio.Player
+	nextChannel int
+}
+
+type effectKey struct {
+	name string
+	rate uint64
+	side int
 }
 
 // New loads the disk's music with a pure Go decoder and mixer.
 func New(muted bool) (*Audio, error) {
+	selector, err := paula.NewSampleSelector()
+	if err != nil {
+		return nil, err
+	}
 	a := &Audio{
-		context: audio.NewContext(sampleRate),
-		music:   make(map[string]*ebitenaudio.Player),
-		samples: make(map[string][]byte),
-		muted:   muted,
+		context:     audio.NewContext(sampleRate),
+		music:       make(map[string]*ebitenaudio.Player),
+		samples:     make(map[string][]byte),
+		playback:    make(map[effectKey][]byte),
+		muted:       muted,
+		selector:    selector,
+		nextChannel: 1,
 	}
 	for _, name := range []string{"intro", "halloffame"} {
 		data, err := assets.Read("original/" + name)
@@ -91,68 +109,53 @@ func New(muted bool) (*Audio, error) {
 
 // Event plays the disk sample associated with a simulation event.
 func (a *Audio) Event(event game.Event) {
-	name := ""
-	switch event.Kind {
-	case game.Bounce:
-		if event.Value == 1 {
-			name = "paddle"
-		} else if event.Value == 2 {
-			name = "metal"
-		}
-	case game.BrickHit:
-		name = "brick"
-	case game.BrickBreak:
-		if event.Effect != game.NoEffect {
-			name = "bonus-brick"
-		}
-	case game.BonusCaught:
-		name = "collect"
-		if event.Effect == game.ExtraLife {
-			name = "extra-life"
-		}
-		if event.Effect == game.Grow {
-			name = "grow"
-		}
-	case game.LevelStarted:
-		name = "start"
-	case game.LifeLost:
-		if event.Value == 0 {
-			name = "game-over"
-		}
-	case game.EnemyHit:
-		name = "enemy-hit"
-	case game.CombatStarted:
-		name = "start"
-	case game.CombatHit:
-		name = "enemy-hit"
-	case game.CombatCompleted:
-		name = "combat-end"
-	}
-	a.play(name)
+	name, rate := a.SelectSample(event)
+	a.play(name, rate)
 }
 
-func (a *Audio) play(name string) {
+// SelectSample shares the exact live selection with the silent movie renderer.
+func (a *Audio) SelectSample(event game.Event) (string, float64) {
+	if a == nil || a.selector == nil {
+		return "", 1
+	}
+	return a.selector.Select(event)
+}
+
+// Events consumes one native update in the original queue's newest-first order.
+// Scheduling remains update-based rather than a cycle-exact Copper interrupt.
+func (a *Audio) Events(events []game.Event) {
+	for _, event := range paula.OrderedEvents(events) {
+		a.Event(event)
+	}
+}
+
+func (a *Audio) play(name string, rate float64) {
 	if a.muted || a.paused || len(a.samples[name]) == 0 {
 		return
 	}
-	// Dispose completed voices rather than accumulating an audio player per hit.
-	active := a.voices[:0]
-	for _, voice := range a.voices {
-		if voice.IsPlaying() {
-			active = append(active, voice)
-		} else {
-			_ = voice.Close()
+	channel := a.nextChannel
+	a.nextChannel = paula.NextPaulaChannel(channel)
+	if old := a.voices[channel]; old != nil {
+		_ = old.Close()
+	}
+	key := effectKey{name: name, rate: math.Float64bits(rate), side: paula.PaulaStereoSide(channel)}
+	pcm := a.playback[key]
+	if pcm == nil {
+		pcm = paula.ResampleEffect(a.samples[name], rate, channel)
+		// Recovered period changes use a small finite set. Keep practice or
+		// future event sources from retaining an unlimited number of variants.
+		if len(a.playback) >= 512 {
+			clear(a.playback)
 		}
+		a.playback[key] = pcm
 	}
-	a.voices = active
-	if len(a.voices) >= 8 {
-		_ = a.voices[0].Close()
-		a.voices = a.voices[1:]
+	if len(pcm) == 0 {
+		return
 	}
-	voice := a.context.NewPlayerFromBytes(a.samples[name])
-	voice.SetVolume(0.65)
+	voice := a.context.NewPlayerFromBytes(pcm)
+	voice.SetVolume(paula.EffectVolume(a.current != ""))
 	voice.Play()
-	a.voices = append(a.voices, voice)
+	a.voices[channel] = voice
 }
 
 // Music changes songs only at screen transitions, retaining playback on mute.
@@ -164,6 +167,11 @@ func (a *Audio) Music(name string) {
 		player.Pause()
 	}
 	a.current = name
+	for _, voice := range a.voices {
+		if voice != nil {
+			voice.SetVolume(paula.EffectVolume(name != ""))
+		}
+	}
 	if player := a.music[name]; player != nil {
 		if err := player.Reset(); err == nil && !a.muted && !a.paused {
 			player.Play()
@@ -185,6 +193,9 @@ func (a *Audio) SetPaused(paused bool) {
 		}
 	}
 	for _, voice := range a.voices {
+		if voice == nil {
+			continue
+		}
 		if paused {
 			voice.Pause()
 		} else if !a.muted {
@@ -205,7 +216,9 @@ func (a *Audio) ToggleMute() {
 	}
 	if a.muted {
 		for _, voice := range a.voices {
-			voice.Pause()
+			if voice != nil {
+				voice.Pause()
+			}
 		}
 	}
 }
@@ -219,6 +232,8 @@ func (a *Audio) Close() {
 		_ = player.Close()
 	}
 	for _, voice := range a.voices {
-		_ = voice.Close()
+		if voice != nil {
+			_ = voice.Close()
+		}
 	}
 }

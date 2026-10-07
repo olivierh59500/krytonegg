@@ -12,7 +12,7 @@ import (
 
 // Files contains the original level table, converted images, and tracker music.
 //
-//go:embed levels.json combat.json manifest.json images sprites audio original/intro original/halloffame original/level.tab
+//go:embed levels.json combat.json manifest.json presentation.json images sprites audio original/intro original/halloffame original/level.tab original/menu.art original/copyrigh.txt original/fame.art original/zz_3.bmp original/final.bmp
 var Files embed.FS
 
 // Read returns an embedded asset without depending on the working directory.

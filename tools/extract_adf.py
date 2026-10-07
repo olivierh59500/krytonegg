@@ -13,6 +13,8 @@ from pathlib import Path
 import struct
 import wave
 
+from presentation_recovery import recover_presentation
+
 from PIL import Image
 
 DISK_NAME = "Krypton Egg (1990)(HitSoft)[cr QTX].adf"
@@ -222,6 +224,11 @@ def main() -> None:
     for name, address in (("laser", 0x22A44), ("laser-alt", 0x22AC0),
                            ("paddle-ghost", 0x208A2)):
         save_sprite(name, masked(address), address)
+    # The original displays a zero-based LEVEL banner before creating a paddle.
+    save_sprite("level-label", packed(0x2F2C4), 0x2F2C4)
+    for digit in range(10):
+        address = 0x2F570 + digit * 0x8C
+        save_sprite(f"level-digit-{digit}", packed(address), address)
 
     for source, name, copper in (("intro.bmp", "intro", 0x7772),
                                  ("menu.art", "menu", 0x808A),
@@ -319,6 +326,11 @@ def main() -> None:
         "grow": (0x40C1A, 0x5DC, 0x226), "brick-alt": (0x2FAE8, 0x28A, 0x271),
         "teleport": (0x3A914, 0x4E2, 0x5DC), "enemy-fire": (0x3B2D8, 0x44C, 0x31B),
         "combat-end": (0x3E186, 0xEA6, 0x316),
+        "ceiling": (0x3BB70, 0x226, 0x267), "wall": (0x3BB70, 0x226, 0x32F),
+        "paddle-edge": (0x3BFBC, 0x23F, 0x2CB),
+        "magnet-release": (0x39C30, 0x672, 0x2CB),
+        "cannon-fire": (0x46304, 0x524, 0x2F8),
+        "combat-fire": (0x46304, 0x524, 0x244),
     }
     for name, (address, length_words, period) in sounds.items():
         sample = graphics[address - GRAPHICS_BASE:address - GRAPHICS_BASE + length_words * 2]
@@ -334,6 +346,7 @@ def main() -> None:
         manifest["sounds"][name] = {"source": "zz_3.bmp", "offset": address - GRAPHICS_BASE,
                                      "length_bytes": len(sample), "period": period, "sample_rate": rate}
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    recover_presentation(code, output)
     print(f"Extracted {len(files)} OFS files; converted original art, 60 levels and {len(sounds)} sounds.")
 
 

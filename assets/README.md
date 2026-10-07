@@ -4,6 +4,9 @@ This directory contains Go embedding code and locally reconstructed game data.
 The reference disk, raw files, PNG/WAV conversions, level tables, palettes, and
 all other disk-derived assets are excluded from Git and its history.
 
+See [finding the reference ADF](../README.md#finding-the-reference-adf) for the
+Planet Emu catalogue link, exact release name, archive extraction, and checksum.
+
 Supply the original ADF under the ignored `previous/` directory, then run:
 
 ```sh

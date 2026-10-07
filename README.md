@@ -22,6 +22,29 @@ make assets
 No replacement artwork or another game release is downloaded. `make run`,
 `make build`, and the Android script check that the local reconstruction is current.
 
+## Finding the reference ADF
+
+Open the [Planet Emu Amiga ADF catalogue, letter K](https://www.planetemu.net/roms/commodore-amiga-games-adf?page=K)
+and filter for **Krypton Egg**. Select **Krypton Egg (1990)(HitSoft)[cr QTX]**,
+the release used to develop and validate the extraction scripts. Other variants
+with additional suffixes have not been verified.
+
+Extract the archive first: the scripts accept an `.adf`, not a ZIP. Place it at:
+
+```text
+previous/Krypton Egg (1990)(HitSoft)[cr QTX].adf
+```
+
+Then run `make assets`. If the ADF is elsewhere, set `KRYTONEGG_ADF` to its
+local path as shown above. The validated uncompressed disk is **901,120 bytes**
+and has this SHA-256 checksum:
+
+```text
+18872e9748bd1b8231da039b8d0b5b493f280e458140f69644f3bbc494902651
+```
+
+The disk and reconstructed assets stay local and remain excluded from Git.
+
 ## Run
 
 Requires Go 1.26 or newer and a desktop graphics environment.
